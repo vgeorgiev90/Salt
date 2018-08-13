@@ -1,0 +1,13 @@
+{% set apache = salt.grains.filter_by({
+  'RedHat': {
+     'package': 'httpd', 
+     'service': 'httpd',
+     'domain': 'centos.example.com'
+   },
+  'Debian': {
+     'package': 'apache2', 
+     'service': 'apache2',
+     'domain': 'debian.example.com'
+  },
+}) %}
+
