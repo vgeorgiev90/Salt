@@ -1,0 +1,531 @@
+############## Overview #############
+Also known as SaltStack platform.
+It is used for configuration management and command execution, 
+also it provides IaC functionality. It is written in python and it uses
+Yaml as declaration syntax.It uses ZeroMQ messaging library
+Most setups use master and minions salt infrastructure.
+The master provides binding socket to publish events, all minions
+listen for this events and execute them if the host matches.
+All declared events are known as salt states
+Ports that needs to be opened:
+
+4505 - minions listen for events
+4506 - used for minions to send Data to the master 
+Ports needs to be opened only to the master.
+
+There are two ways in Salt that you can "configure a system"
+
+Imperative configuration management:
+Tell system what to do to reach desired results
+(salt execution modules)
+example:
+
+salt '*' user.add viktor home=/home/viktor shell=/bin/bash
+
+Declaritive configuration managment
+describe the end state
+(salt states)
+example:
+
+viktor:
+  user.present:
+    - home: /home/viktor
+	- shell: /bin/bash
+	
+Grains - Provide static data for the system (OS, Kernel,IP etc.)
+similar to puppet facts. Custom grains can be added too.	
+Pillar - Contains user defined variables, config parameters, key/value pairs
+similar to puppet hiera, it can be set via the cli or in pillar data files
+Runners - perform assistive tasks on the salt master (view minion connectivity,view job info etc..)
+returners - provide output data to external systems such as: databases, monitoring systems etc..
+beacons and reactors - 
+beacons - monitor events from non salt processes via salt
+reactors - act on those events (monitor config file for changes , then reset the changes if they are made by non-salt users/programs)
+salt SSH - perform remote execution tasks on servers without salt installed
+salt cloud - use salt as provisioning tool on certain providers, bring provisioned servers under salt control
+salt mine - optional component that queries for and stores arbitary data
+allows minions to access data about other minions, can be stored in the config or as pillar data
+#salt mine example:
+cd /etc/salt/minion.d
+vi salt-mine.conf
+
+mine_functions:
+  network_ip_addrs: []
+
+#This will query all ip addresses, for per interface example
+
+mine_functions:
+  network_ip_addrs: []
+    interface: eth0
+
+## To update the mine data , instead of waiting the default 60 min 
+salt '*' mine.update
+
+## To query mine data
+salt '*' mine.get '*'
+
+#Salt setups
+
+Single master - One master manages one or more nodes
+Multy master - Two or more masters manages all nodes.
+redundant - multiple masters are running "hot", any minion can access any master
+all masters share the same public key, all minions must be added to all masters,
+all masters needs to be added to minion config
+failover - single master runs "hot" , multiple master are running standby
+Masterless - minions can run states on their own
+
+
+############### Salt install ##################
+
+#Bootstrap install
+
+curl -L https://bootstrap.saltstack.com -o bootstrap-salt.sh
+#Run the script like 
+bootstrap-salt.sh -P -M
+#-P allow the script to use pip
+#-M install master server
+
+#update the /etc/hosts file and add salt as hostname
+
+#Saltstack can be installed from the official repo too
+yum install https://repo.saltstack.com/yum/redhat/salt-repo-latest-2.el7.noarch.rpm
+yum clean expire-cache
+yum install salt-master
+# other packages that may be needed: salt-minion, salt-ssh, salt-syndic, salt-cloud, salt-api
+
+##masterless setup
+install salt from bootstrap
+stop the salt-minion service
+Open /etc/salt/minion and modify file_client to local,
+uncomment file_roots, base, -/srv/salt
+
+#file_roots - determines where state files are stored
+#pillar_roots - determines where pillar files are stored
+
+########### Multi master config ##########
+
+#All masters should use the same configuration
+#All masters share the same public and private keys
+#Minions need to be configured to use both masters
+#Masters must have same files : file_roots, pillar_roots (It is possible to export nfs share between the masters)
+
+Install second master with bootstrap script with flags 
+-P -M -N
+
+Stop salt-master service, and sync /etc/salt/pki/master/{master.p*} from the original one
+
+In the minion config modify the master section
+master:
+  - salt
+  - salt2
+  
+########## Commands ###########
+
+#To list all modules
+salt 'node' sys.list_modules
+#to list functions of a module
+salt 'node' sys.list_functions module
+#man page for module
+salt 'node' sys.doc module
+
+#Check all salt keys
+salt-key -L
+
+#Accept a key on the master
+#View the pub key of the master
+salt-key -F master
+#Copy the pub hash and modify /etc/salt/minion master_finger
+
+#To check which key hash belong to which nodes
+salt-call --local key.finger
+
+#To accept a key
+salt-key -A server
+#-A accept all
+#-R reject
+
+### To run execution modules
+salt 'host' module args
+salt '*' pkg.install 'lynx'
+salt '*' cmd.run 'ls -l /etc'
+### Multiple module can be executed separated by ,
+salt '*' pkg.install,cmd.run 'httpd','echo "test"'
+
+#salt-call can be used to execute commands locally
+#grains module can be used to check or set grains
+salt 'master' grains.setval role saltmaster
+                              |        |
+							 key      value
+							 
+### Minion targeting ##
+#Minion-id
+salt 'minion1' test.ping
+#Targeting via grains
+salt -G 'os:centos' test.ping
+#Compound (regex and grains)
+salt -C 'G@os:centos or/and E@minion*' test.ping
+# Subnet/IP targeting
+salt -S 192.168.0.0/24 test.ping
+
+#Batching
+#only set number of server work simultaneously
+salt '*' -b 1 test.ping
+
+#Nodegroups can be created in the salt main config or master.d like:
+nodegroups:
+  dev: 'G@os:CentOS and G@role:web'
+
+###### Salt states #########
+
+# To check state functions for module
+salt 'master' sys.list_state_functions module
+
+salt 'master' sys.state_doc module.function
+
+salt 'master' sys.state_argspec module.function
+
+## top.sls file maps what servers will use which states
+## it must be created in the root directory for file_roots
+
+base:
+  'salt-minion1':
+     - php
+     - php.php-mysql
+     - php.php-xml
+     - httpd
+     - httpd.user
+
+
+
+#Basic example
+In your root_files directory create dir called php
+
+#php/init.sls
+php_install:                   ---> name declaration
+  pkg.installed:               ---> state function
+    - name: php                ---> properties (pkg to be installed)
+	
+#php/php-mysql.sls
+include:
+  - php
+
+php-mysql:
+  pkg.installed:
+    - name: php-mysql
+
+#php/php-curl.sls
+include:
+  - php
+
+curl_install:
+  pkg.installed:
+    - name: php-curl
+	
+### To run the state module init.sls
+salt 'node' state.sls module-name 
+
+### To run all state modules with top.sls
+salt 'node' state.apply
+salt 'node' state.highstate
+
+### or specific state modules
+salt 'node' state.apply module-name
+
+#example in our case
+salt 'salt-minion1' state.sls php
+
+#test=true - for dry run
+
+
+########## Salt requisites #########
+define relationships between states
+
+require - the targeted state must execute before the dependent state
+
+watch - dependent state runs only if result of targeted state is true
+
+prereq - depend. state takes action if it determines that targeted state will make changes
+
+onfail - dependent state runs if targeted fails
+
+onchanges - same as prereq
+
+use - dependent state inherits parameters of targeted state
+
+############# salt runner ################
+
+#salt-run is the frontend command for executing Salt Runners. 
+#Salt runners are simple modules used to execute convenience functions on the master
+
+salt-run manage.present
+#cached info for all present minions
+salt-run pillar.show_top
+
+#add a reactor
+salt-run reactor.add 'salt/beacon/*/inotify//etc/my.cnf' reactors='/srv/reactor/mysql/mysql.sls'
+
+#view previously run jobs
+salt-run jobs.list_jobs
+
+#view job per id
+salt-run jobs.lookup_jid JOBID
+
+#scheduling highstate
+salt 'minion1' schedule.add highstate-1 function='state.highstate' seconds=60
+                               |                      |                   |
+                             name                  function             interval
+# schedule.delete - to remove the job
+
+## Jobs can be scheduled with pillar data too, do not forget to update pillar top.sls
+schedule:
+  highstate:
+    function: state.highstate
+    minutes: 30
+	
+############# Orchestration #############
+#The orchestrate runner generalizes the Salt state system to a Salt master context. 
+#Whereas the state.sls, state.highstate, et al. functions are concurrently and independently 
+#executed on each Salt minion, the state.orchestrate runner is executed on the master, 
+#giving it a master-level view and control over requisites, such as state ordering and conditionals.
+
+# mkdir file_roots/orch
+#example orc/setup.sls orchestration file
+set_hostname:
+  salt.function:
+    - name: network.mod_hostname
+    - tgt: 'minion1'
+    - arg: web1
+
+run_command:
+  salt.function:
+    - name: cmd.run
+	- tgt: 'minion1'
+	-arg:
+	  - rm -rf /home/user
+
+configure_second_minion:
+  salt.state:
+    - tgt: 'minion2'
+	- highstate: True
+	
+config_minion1:
+  salt.state:
+    - tgt: 'minion1'
+	- sls:
+	   - apache
+	   - mysql.client
+	   
+# To run it
+salt-run state.orch orch.setup
+
+############# Salt SSH #################
+
+#It uses salt on a servers without salt installed
+#install salt-ssh via the salt repo ( not included in bootstrap script)
+# All config data is stored in tmp directory and do not persist after reboot
+ 
+#Setup passwordless sudo
+#Edit /etc/salt/roster and add the ssh host
+ssh-minion:
+  host: <IP>
+  user: user
+  sudo: True
+
+salt-ssh * test.ping
+ssh-copy-id -i /etc/salt/pki/master/ssh/salt-ssh.rsa.pub user@IP
+
+############# Salt cloud #################
+
+#Use salt to provision on cloud providers
+#config files:
+# /etc/salt/cloud.providers.d - provider files 
+# /etc/salt/cloud.profiles.d - profile files (server types, etc..)
+
+#example:
+provider file:
+aws_providers_ec2:
+  driver: ec2
+  id: 'key-id'
+  key: 'private-key'
+  private_key: /root/key.pem
+  keyname: aws-ansible-key
+  security_group: Basic-firewall
+
+profile file:
+salt-server:
+  provider: aws_providers_ec2             ### name reference from cloud.providers.d
+  location: eu-west-3
+  image: ami-2cf54551
+  ssh_username: ec2-user
+  size: t2.micro
+  minion:
+    master: 192.168.100.100
+
+#to run it
+salt-cloud -p salt-server test-name
+
+############# Jinja templates ############
+#Jinja templates can be used with state files like the following:
+
+### Jinja package variable
+{% set apache = salt.grains.filter_by({
+  'RedHat': {'package': 'httpd', 'service': 'httpd'},
+  'Debian': {'package': 'apache2', 'service': 'apache2'},
+}) %}
+
+
+httpd_install:
+  pkg.installed:
+#    {% if grains['os_family'] == 'RedHat' %}
+
+    - name: {{ apache.package }}
+
+#    {% elif grains['os_family'] == 'Debian' %}
+
+    - name: {{ apache.package }}
+
+#    {% endif %}
+  service.running:
+    - name: {{ apache.service }}
+    - enable: true
+
+## Variables can be exported to map.jinja file
+## To import map.jinja to all state the following should be included
+{% from "httpd/map.jinja" import apache with context %}
+
+#Jinja for loop
+#Example , pillar items in file mysql.sls:
+databases:
+  wordpress:
+     host: 1.1.1.1
+  test_database:
+     host: 2.2.2.2
+	 
+#Db creation with for loop and dictionery
+
+{% for database, arg in salt['pillar.get']('mysql:databases', {}).iteritems() %}
+
+{{ database}}_database:
+  mysql_database.present:
+    - name: {{ database }}
+	- host: {{ host }}
+	- connection_user: root
+	- connection_pass: password
+	- connection_charset: utf8
+	
+{% endfor %}
+
+database: arbitrary assigned to dictionery
+arg: The items in the dict (to be iterated over)
+salt['pillar.get']: retrieve items in the mysql:databases dictionary
+iteritems: iterate over all provided items
+
+#If there are more than one value it can be called with 
+#arg.variable 
+
+############ Pillar ###############
+
+Pillar variables are stored in the pillar_roots defined location in master config
+Similar to salt states pillar also have top.sls and files ending in .sls
+example pillar file mysql.sls
+
+pillar/mysql.sls
+mysql:
+  server:
+    bind: 127.0.0.1
+    password: viktor123
+
+#In order to reference pillar variable
+{{ pillar['mysql']['server']['bind'] }}
+
+### Pillar data can be encrypted with gpg keys like:
+mkdir /etc/salt/gpgkeys
+chmod 700 /etc/salt/gpgkeys
+#generate gpg key
+gpg --gen-key --homedir /etc/salt/gpgkeys
+#add key to keyring
+gpg --homedir /etc/salt/gpgkeys --armor --export saltstack > exported-key.gpg
+                                                    |
+											generated-key-name
+gpg --import exported-key.gpg
+
+#Generate cyphet to use for variable
+echo -n "viktor123" | gpg --armor --batch --trust-model always --encrypt -r saltstack
+
+#Ecnrypted password can now be stored in the pillar data file
+#In order for any pillar file to contain gpg encrypted data add this at the beggining
+" #!yaml|gpg "
+
+############## Salt event system ##############
+
+Called event bus, it is used for: IPC , network transport.
+There are two components: event socket - published events, 
+event library - listens to events and sends them to salt system
+master and minion each have their own event bus
+
+#To look at the event bus:
+salt-run state.event pretty=True
+
+#In order to track state events change the option to True in salt master config
+
+### beacons and reactors ###
+
+beacons - monitor salt or non-salt events and send report to the master
+#create beacon to monitor file chages:
+#install inotify python library on minions
+
+#Debian based
+salt minion pkg.install python-pyinotify
+
+#Redhat based
+salt minion pip.install pyinotify
+salt minion1 pkg.install python-inotify
+
+#create beacon file in pillar roots
+beacons:
+  inotify:
+    - files:
+{% if grains['os_family'] == 'RedHat' %}
+        /etc/httpd/conf/httpd.conf:
+{% endif %}
+{% if grains['os_family'] == 'Debian' %}
+        /etc/apache2/apache2.conf:
+{% endif %}
+          mask:
+            - modify
+    - disable_during_state_run: True
+
+	
+reactors - take actions based on events , it monitors the event bus 
+and looks on defined event tags
+
+four reactor types:
+local,remote execution, 
+runner - 
+caller - remote execution for masterless minions
+
+#To user reactors you have to update the master config and add reactor sls files
+#Create directory for reactors
+#example:
+
+restore_httpd_config_file:
+  local.state.single:
+    - tgt: 'minion* and G@os_family:CentOS'
+    - tgt_type: compound
+    - args:
+        - fun: file.managed
+        - name: /etc/httpd/conf/httpd.conf
+        - source: salt://httpd/config/httpd.conf
+		
+#example for state run with reactor
+httpd_install:
+  local.state.sls:
+    - tgt: 'web*'
+    - args:
+        - mods: apache
+
+
+##Map the reactor to the event that will trigger it in salt master conf or master.d
+reactor:
+  - 'salt/beacon/*/inotify//etc/httpd/conf/httpd.conf':
+    - /root/salt/reactors/apache/httpd_config_reactor.sls
